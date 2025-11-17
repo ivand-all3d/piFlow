@@ -15,7 +15,7 @@ dependencies = [
     "imageio-ffmpeg",
     "mmcv",
     "mmgen",
-    "numpy==1.26.4",
+    "numpy>=1.26.4",
     "open-clip-torch",
     "peft>=0.17.0",
     "pydantic==2.7.4",
