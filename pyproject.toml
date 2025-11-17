@@ -27,6 +27,7 @@ dependencies = [
     "wandb",
     "yapf==0.40.1",
     "zstandard",
+    "orjson"
 ]
 
 [tool.uv.sources]
