@@ -1,8 +1,8 @@
 [project]
 name = "piflow"
-version = "0.1.0"
+version = "0.1.1"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 dependencies = [
     "accelerate",
     "bitsandbytes",
@@ -32,7 +32,3 @@ dependencies = [
 [tool.uv.sources]
 mmcv = { git = "https://github.com/open-mmlab/mmcv.git", rev = "d409eedc816fccfb1c8d57e5eed5f03bd075f327" }
 mmgen = { git = "https://github.com/Lakonik/mmgeneration.git", rev = "500a93e474638c87dcaf8fad94cfbe1ef29acd1f" }
-
-[tool.uv.extra-build-dependencies]
-mmgen = [{ requirement = "torch", match-runtime = true }, { requirement = "numpy", match-runtime = true }]
-mmcv = [{ requirement = "torch", match-runtime = true }, { requirement = "numpy", match-runtime = true }]
