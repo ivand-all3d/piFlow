@@ -1,6 +1,6 @@
 [project]
 name = "piflow"
-version = "0.1.1"
+version = "0.1.2"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -22,7 +22,7 @@ dependencies = [
     "sentencepiece",
     "setuptools",
     "tensorboard",
-    "transformers==4.54.1",
+    "transformers>=4.54.1",
     "torch",
     "wandb",
     "yapf==0.40.1",
