@@ -28,6 +28,33 @@ class LatentDiffusionTextImage(BaseDiffusion):
         elif 'prompt_kwargs' in data:
             assert self.text_encoder is not None, 'Text encoder must be provided for encoding text to embeddings.'
             prompt_embed_kwargs = self.text_encoder(**data['prompt_kwargs'])
+            # print("Using text encoder to encode data")
+            # print(data['prompt_kwargs'])
+            # print(prompt_embed_kwargs)
+
+            # Need to manually pad sequence here, because we're not using cached prompts
+            def pad(prompt_embeds):
+                pad_seq_len = 512
+                # Check the length of the second dimension (sequence length)
+                seq_len = prompt_embeds.shape[1]
+
+                if seq_len > pad_seq_len:
+                    # Truncate: Keep all batches (dim 0), slice dim 1, keep all hidden dims
+                    prompt_embeds = prompt_embeds[:, :pad_seq_len]
+                else:
+                    # Calculate the padding size needed
+                    diff = pad_seq_len - seq_len
+                    
+                    # Construct the shape of the zeros tensor:
+                    # (Batch Size, Difference in Length, ...Rest of dimensions)
+                    zeros_size = (prompt_embeds.shape[0], diff) + prompt_embeds.shape[2:]
+                    
+                    # Concatenate along dimension 1
+                    prompt_embeds = torch.cat([prompt_embeds, prompt_embeds.new_zeros(zeros_size)], dim=1)
+                    
+                return prompt_embeds
+            prompt_embed_kwargs["encoder_hidden_states"] = pad(prompt_embed_kwargs["encoder_hidden_states"])
+            prompt_embed_kwargs["encoder_hidden_states_mask"] = pad(prompt_embed_kwargs["encoder_hidden_states_mask"])
         else:
             raise ValueError('Either `prompt_embed_kwargs` or `prompt_kwargs` should be provided in the input data.')
 
