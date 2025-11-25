@@ -6,7 +6,7 @@ model = dict(
     type='LatentDiffusionTextImage',
     vae=dict(
         type='PretrainedVAEQwenImage',
-        from_pretrained='Qwen/Qwen-Image',
+        from_pretrained='Qwen/Qwen-Image-Edit-2509',
         subfolder='vae',
         freeze=True,
         torch_dtype='bfloat16'),
@@ -23,7 +23,7 @@ model = dict(
                 'proj_out_logstds',
                 'norm_out',
                 'lora'],
-            pretrained='huggingface://Qwen/Qwen-Image/transformer/diffusion_pytorch_model.safetensors.index.json',
+            pretrained='huggingface://Qwen/Qwen-Image-Edit-2509/transformer/diffusion_pytorch_model.safetensors.index.json',
             num_gaussians=8,
             logstd_inner_dim=1024,
             gm_num_logstd_layers=2,
@@ -68,7 +68,7 @@ model = dict(
             type='QwenImageTransformer2DModel',
             patch_size=2,
             freeze=True,
-            pretrained='huggingface://Qwen/Qwen-Image/transformer/diffusion_pytorch_model.safetensors.index.json',
+            pretrained='huggingface://Qwen/Qwen-Image-Edit-2509/transformer/diffusion_pytorch_model.safetensors.index.json',
             in_channels=64,
             out_channels=64,
             num_layers=60,
@@ -87,7 +87,7 @@ model = dict(
 
 save_interval = 100
 must_save_interval = 200  # interval to save regardless of max_keep_ckpts
-eval_interval = 100
+eval_interval = 1 #100
 work_dir = f'work_dirs/{name}'
 # yapf: disable
 train_cfg = dict(
@@ -121,22 +121,23 @@ checkpoint_config = dict(
     out_dir='checkpoints/')
 
 evaluation = []
-# for data_split in ['val']:
-#     for temperature in [0.3]:
-#         prefix = f'step4_temp{temperature}'
-#         evaluation.append(
-#             dict(
-#                 type='GenerativeEvalHook',
-#                 data=data_split,
-#                 prefix=prefix,
-#                 sample_kwargs=dict(
-#                     test_cfg_override=dict(
-#                         temperature=temperature,
-#                     )),
-#                 interval=eval_interval,
-#                 viz_dir=f'viz/{name}/{data_split}_{prefix}',
-#                 metric_cpu_offload=True,
-#                 save_best_ckpt=False))
+for data_split in ['val']:
+    for temperature in [0.3]:
+        prefix = f'step4_temp{temperature}'
+        evaluation.append(
+            dict(
+                type='GenerativeEvalHook',
+                data=data_split,
+                prefix=prefix,
+                sample_kwargs=dict(
+                    test_cfg_override=dict(
+                        temperature=temperature,
+                    )),
+                interval=eval_interval,
+                viz_dir=f'viz/{name}/{data_split}_{prefix}',
+                metric_cpu_offload=True,
+                feed_batch_size=1,
+                save_best_ckpt=False))
 
 total_iters = 9000
 log_config = dict(
@@ -159,6 +160,7 @@ custom_hooks = [
         priority='VERY_HIGH'),
 ]
 
-load_from = None
+# Start training from existing Qwen-Image checkpoint
+load_from = "gmqwen_k8_piid_4step_32gpus.pth"
 resume_from = f'checkpoints/{name}/latest.txt'  # resume by default
 workflow = [('train', save_interval)]

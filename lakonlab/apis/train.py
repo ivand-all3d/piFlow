@@ -160,7 +160,8 @@ def train_model(model,
         for data_loader in data_loaders:
             data_loader.sampler.set_epoch(runner.epoch)
             data_loader.sampler.set_iter(runner.iter)
-    elif exists_ckpt(cfg.load_from):
+    #elif exists_ckpt(cfg.load_from):
+    elif cfg.load_from is not None:
         runner.load_checkpoint(cfg.load_from, **ckpt_kwargs)
 
     runner.run(data_loaders, cfg.workflow, cfg.total_iters)

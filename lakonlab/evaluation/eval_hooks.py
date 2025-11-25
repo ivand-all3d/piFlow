@@ -63,6 +63,7 @@ def evaluate(model, dataloader, metrics=None,
     total_batch_size = batch_size * ws
 
     max_num_fakes = len(dataloader.dataset)
+    max_num_fakes = 8
 
     if viz_dir is not None:
         html_entries = []
@@ -81,6 +82,8 @@ def evaluate(model, dataloader, metrics=None,
     batch_size_list = []
 
     for i, data in enumerate(dataloader):
+        if i >= max_num_fakes:
+            break
         can_reuse = False
         loaded_imgs_tensor = None
         loaded_html_entries = None
@@ -241,6 +244,7 @@ class GenerativeEvalHook(_GenerativeEvalHook):
 
     def __init__(self,
                  *args,
+                 metrics=None,
                  data='',
                  viz_dir=None,
                  feed_batch_size=32,
@@ -249,7 +253,9 @@ class GenerativeEvalHook(_GenerativeEvalHook):
                  prefix='',
                  metric_cpu_offload=False,
                  **kwargs):
-        super(GenerativeEvalHook, self).__init__(*args, **kwargs)
+        if metrics is None:
+            metrics = []
+        super(GenerativeEvalHook, self).__init__(*args, metrics=metrics, **kwargs)
         self.data = data
         self.viz_dir = viz_dir
         self.file_client = FileClient.infer_client(
