@@ -85,9 +85,9 @@ model = dict(
     )
 )
 
-save_interval = 100
+save_interval = 50
 must_save_interval = 200  # interval to save regardless of max_keep_ckpts
-eval_interval = 1 #100
+eval_interval = 100 #100
 work_dir = f'work_dirs/{name}'
 # yapf: disable
 train_cfg = dict(
@@ -117,7 +117,7 @@ checkpoint_config = dict(
     interval=save_interval,
     must_save_interval=must_save_interval,
     by_epoch=False,
-    max_keep_ckpts=1,
+    max_keep_ckpts=5,
     out_dir='checkpoints/')
 
 evaluation = []
