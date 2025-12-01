@@ -117,7 +117,7 @@ checkpoint_config = dict(
     interval=save_interval,
     must_save_interval=must_save_interval,
     by_epoch=False,
-    max_keep_ckpts=5,
+    max_keep_ckpts=32,
     out_dir='checkpoints/')
 
 evaluation = []
