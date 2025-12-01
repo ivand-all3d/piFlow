@@ -107,7 +107,7 @@ test_cfg = dict(
 
 data = dict(
     workers_per_gpu=2,
-    train_dataloader=dict(samples_per_gpu=2),
+    train_dataloader=dict(samples_per_gpu=1), # samples_per_gpu determines batch_size
     val_dataloader=dict(samples_per_gpu=1),
     test_dataloader=dict(samples_per_gpu=1),
     persistent_workers=True,

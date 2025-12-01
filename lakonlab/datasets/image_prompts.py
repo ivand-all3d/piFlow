@@ -12,6 +12,7 @@ import gzip
 import orjson
 import mmcv
 import torch.storage
+import random
 torch.storage.UntypedStorage.dtype = torch.uint8  # hot patch for torch 2.6 deserialization
 
 from io import BytesIO
@@ -150,6 +151,34 @@ class ImagePrompt(Dataset):
             self.image_datalist, bucket_ids = self.parse_datalist(
                 self.image_dir_path, image_datalist_path, datalist_must_exist=True)
             assert dataset_len == len(self.image_datalist)
+
+        # Reassign resolutions randomly
+        if self.prompt_dataset is not None:
+            # 1. Define your target resolutions
+            _target_resolutions = [(1024, 1024), (1600, 1600), (2048, 2048)]
+
+            # 2. Define a batched mapping function
+            def _assign_random_resolution(examples):
+                # examples is a dict of lists; find batch length from 'prompt' or any existing key
+                n_samples = len(examples['prompt']) 
+                choices = [random.choice(_target_resolutions) for _ in range(n_samples)]
+                
+                # Assign new width and height
+                examples['width'] = [c[1] for c in choices] # Width
+                examples['height'] = [c[0] for c in choices] # Height
+                return examples
+
+            # 3. Apply the map to overwrite the dataset columns
+            # load_from_cache_file=False ensures you get a new random seed every restart
+            logger = get_root_logger()
+            mmcv.print_log('Reassigning width/height to random choices...', logger=logger)
+            
+            self.prompt_dataset = self.prompt_dataset.map(
+                _assign_random_resolution,
+                batched=True,
+                load_from_cache_file=False,
+                desc='Randomizing Resolutions'
+            )
 
         if bucket_ids is None and self.bucketize:
             assert self.prompt_dataset is not None
@@ -413,6 +442,11 @@ class ImagePrompt(Dataset):
         elif 'latents' not in data and 'noise' not in data:  # allocate latents if not already loaded
             if prompt_data is not None and 'height' in prompt_data and 'width' in prompt_data:
                 image_spatial_size = (prompt_data['height'], prompt_data['width'])
+                # image_spatial_size = random.choice([
+                #     (1024, 1024),
+                #     (1600, 1600),
+                #     (2048, 2048),
+                # ])
                 if 'frames' in prompt_data:
                     image_spatial_size = (prompt_data['frames'],) + image_spatial_size
                 latent_size = self.calculate_latent_size(self.calculate_scaled_image_size(image_spatial_size))
@@ -428,5 +462,9 @@ class ImagePrompt(Dataset):
             data.update(negative_prompt_embed_kwargs=self.negative_prompt_embed_kwargs)
         if self.negative_prompt_kwargs is not None:
             data.update(negative_prompt_kwargs=self.negative_prompt_kwargs)
+
+        # print(data)
+        # print(data['latents'].shape)
+        # print(image_spatial_size)
 
         return data
