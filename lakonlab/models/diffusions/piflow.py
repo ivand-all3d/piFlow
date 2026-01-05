@@ -1,6 +1,7 @@
 # Copyright (c) 2025 Hansheng Chen
 
 import sys
+import inspect
 import torch
 import mmcv
 
@@ -9,7 +10,7 @@ from functools import partial
 from mmgen.models.architectures.common import get_module_device
 from mmgen.models.builder import MODULES
 
-from . import GaussianFlow
+from . import GaussianFlow, schedulers
 from .piflow_policies import POLICY_CLASSES, GMFlowPolicy
 from lakonlab.utils import module_eval
 
@@ -146,21 +147,21 @@ class PiFlowImitationBase(GaussianFlow):
                 (bs, 1), device=device)
         ) * (teacher_ratio * (segment_size - window_size).unsqueeze(-1))
 
-        x_t = x_t_src
-        raw_t = raw_t_src
-        sigma_t = sigma_t_src
+        x_t_last = x_t_src
+        raw_t_last = raw_t_src
+        sigma_t_last = sigma_t_src
 
         all_pred_u = []
         all_tgt_u = []
         all_timesteps = []
 
         for teacher_step_id in range(num_intermediate_states):
-            raw_t_a = (raw_t - student_intervals[:, teacher_step_id]).clamp(min=0)
+            raw_t_a = (raw_t_last - student_intervals[:, teacher_step_id]).clamp(min=0)
             raw_t_b = (raw_t_a - teacher_intervals[:, teacher_step_id]).clamp(min=0)
 
             with torch.no_grad(), module_eval(teacher):
                 x_t_a, sigma_t_a, t_a = self.policy_rollout(
-                    x_t, sigma_t, raw_t, raw_t_a, total_substeps,
+                    x_t_last, sigma_t_last, raw_t_last, raw_t_a, total_substeps,
                     policy_detached, seq_len=seq_len)
                 tgt_u = teacher(return_u=True, x_t=x_t_a, t=t_a, **teacher_kwargs)
                 all_tgt_u.append(tgt_u)
@@ -172,9 +173,11 @@ class PiFlowImitationBase(GaussianFlow):
             all_pred_u.append(pred_u)
 
             sigma_t_b = self.timestep_sampler.warp_t(raw_t_b, seq_len=seq_len).reshape(bs, *((ndim - 1) * [1]))
-            x_t = x_t_a + tgt_u * (sigma_t_b - sigma_t_a)
-            raw_t = raw_t_b
-            sigma_t = sigma_t_b
+            x_t_b = x_t_a + tgt_u * (sigma_t_b - sigma_t_a)
+
+            x_t_last = x_t_b
+            raw_t_last = raw_t_b
+            sigma_t_last = sigma_t_b
 
         loss_kwargs = dict(
             u_t_pred=torch.cat(all_pred_u, dim=0),
@@ -186,7 +189,7 @@ class PiFlowImitationBase(GaussianFlow):
         if get_x_t_dst:
             with torch.no_grad():
                 x_t_dst, _, _ = self.policy_rollout(
-                    x_t, sigma_t, raw_t, raw_t_dst, total_substeps,
+                    x_t_last, sigma_t_last, raw_t_last, raw_t_dst, total_substeps,
                     policy_detached, seq_len=seq_len)
         else:
             x_t_dst = None
@@ -211,42 +214,49 @@ class PiFlowImitationBase(GaussianFlow):
         total_substeps = cfg.get('total_substeps', self.num_timesteps)
         eps = cfg.get('eps', 1e-4)
         nfe = cfg['nfe']
-        final_step_size_scale = max(cfg.get('final_step_size_scale', 1.0), eps)
-        base_segment_size = 1 / (nfe - 1 + final_step_size_scale)
 
-        raw_t_src = torch.ones((num_batches,), dtype=torch.float32, device=device)
-        sigma_t_src = self.timestep_sampler.warp_t(raw_t_src, seq_len=seq_len).reshape(
-            num_batches, *((ndim - 1) * [1]))
-        t_src = sigma_t_src.flatten() * self.num_timesteps
+        sampler = cfg.get('sampler', 'FlowMapSDE')
+        sampler_class = getattr(schedulers, sampler + 'Scheduler', None)
+        if sampler_class is None:
+            raise AttributeError(f'Cannot find sampler [{sampler}].')
+
+        sampler_kwargs = cfg.get('sampler_kwargs', {})
+        signatures = inspect.signature(sampler_class).parameters.keys()
+        for key in ['shift', 'use_dynamic_shifting', 'base_seq_len', 'max_seq_len', 'base_logshift', 'max_logshift']:
+            if key in signatures and key not in sampler_kwargs:
+                sampler_kwargs[key] = cfg.get(key, getattr(self.timestep_sampler, key))
+        if 'final_step_size_scale' in cfg:
+            sampler_kwargs['final_step_size_scale'] = cfg['final_step_size_scale']
+        sampler = sampler_class(self.num_timesteps, **sampler_kwargs)
+
+        sampler.set_timesteps(nfe, seq_len=seq_len, device=device)
+        timesteps = sampler.timesteps
+        timesteps_dst = sampler.timesteps_dst
 
         if show_pbar:
             pbar = mmcv.ProgressBar(self.distill_steps)
 
         # ========== Main sampling loop ==========
         for step_id in range(nfe):
-            is_final_step = step_id == nfe - 1
-            if is_final_step:
-                segment_size = base_segment_size * final_step_size_scale
-            else:
-                segment_size = base_segment_size
-
-            raw_t_dst = raw_t_src - segment_size
+            t_src = timesteps[step_id]
+            t_dst = timesteps_dst[step_id]
+            sigma_t_src = (t_src / self.num_timesteps).expand(num_batches).reshape(num_batches, *((ndim - 1) * [1]))
+            sigma_t_dst = (t_dst / self.num_timesteps).expand(num_batches).reshape(num_batches, *((ndim - 1) * [1]))
+            raw_t_src = self.timestep_sampler.unwarp_t(sigma_t_src.flatten(), seq_len=seq_len)
+            raw_t_dst = self.timestep_sampler.unwarp_t(sigma_t_dst.flatten(), seq_len=seq_len)
 
             denoising_output = self.pred(x_t_src, t_src, **kwargs)
             policy = self.policy_class(
                 denoising_output, x_t_src, sigma_t_src, eps=eps)
-            if isinstance(policy, GMFlowPolicy) and not is_final_step:
+            if isinstance(policy, GMFlowPolicy) and step_id < nfe - 1:
                 temperature = cfg.get('temperature', 1.0)
                 policy.temperature_(temperature)
 
-            x_t_dst, sigma_t_dst, t_dst = self.policy_rollout(
+            x_t_dst, _, _ = self.policy_rollout(
                 x_t_src, sigma_t_src, raw_t_src, raw_t_dst, total_substeps,
                 policy, seq_len=seq_len)
 
-            x_t_src = x_t_dst
-            raw_t_src = raw_t_dst
-            sigma_t_src = sigma_t_dst
-            t_src = t_dst
+            x_t_src = sampler.step(x_t_dst, t_src, x_t_src, return_dict=False)[0]
 
             if show_pbar:
                 pbar.update()
@@ -326,7 +336,7 @@ class PiFlowImitationDataFree(PiFlowImitationBase):
 
     is_multistep = True
 
-    def forward_initialize(
+    def initialize_multistep(
             self, x_0, teacher=None, teacher_kwargs=dict(), running_status=None, **kwargs):
         device = get_module_device(self)
         num_batches = x_0.size(0)  # x_0 is a dummy input
@@ -402,9 +412,3 @@ class PiFlowImitationDataFree(PiFlowImitationBase):
             step_states.update(terminate=True)
 
         return loss, log_vars, step_states
-
-    def forward(self, x_0=None, return_step_states=False, **kwargs):
-        if return_step_states:
-            return self.forward_initialize(x_0=x_0, **kwargs)
-        else:
-            return super().forward(x_0=x_0, **kwargs)

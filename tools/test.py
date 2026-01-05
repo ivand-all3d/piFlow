@@ -37,7 +37,7 @@ from mmgen.utils import get_root_logger
 from lakonlab.evaluation.eval_hooks import evaluate
 from lakonlab.datasets import build_dataloader
 from lakonlab.parallel import apply_module_wrapper
-from lakonlab.runner.checkpoint import exists_ckpt
+from lakonlab.runner.checkpoint import exists_ckpt, clear_checkpoint_cache
 
 _distributed_metrics = [
     'FID', 'IS', 'FIDKID', 'PR', 'InceptionMetrics', 'ColorStats', 'HPSv2', 'VQAScore', 'CLIPSimilarity', 'HPSv3']
@@ -211,6 +211,7 @@ def main():
     model = build_model(
         cfg.model, train_cfg=cfg.train_cfg, test_cfg=cfg.test_cfg)
     model.requires_grad_(False).eval()
+    clear_checkpoint_cache()
 
     if distributed:
         module_wrapper = cfg.get('module_wrapper', 'ddp')
@@ -241,12 +242,6 @@ def main():
                 os.path.dirname(viz_dir), os.path.basename(viz_dir) + '.html')
             if args.skip_existing and file_client.exists(html_path):
                 continue
-            if rank == 0:
-                if file_client.exists(viz_dir):
-                    for name in file_client.list_dir_or_file(viz_dir):
-                        file_client.remove(file_client.join_path(viz_dir, name))
-            if distributed:
-                dist.barrier()
 
         metrics = eval_cfg['metrics']
         if isinstance(metrics, dict):

@@ -8,14 +8,15 @@ from accelerate import init_empty_weights
 from mmgen.models.builder import build_module
 
 from .base import BaseModel
-from lakonlab.utils import clone_params, rgetattr, tie_untrained_submodules
+from lakonlab.utils import clone_params, rgetattr, tie_untrained_submodules, untie_all_parameters
 
 
 def train_fwd_bwd(model, args, kwargs, loss_scaler=None):
     is_multistep = rgetattr(model, 'is_multistep', False)
 
     if is_multistep:
-        step_states, log_vars = model(*args, return_step_states=True, **kwargs)
+        initialize_multistep = rgetattr(model, 'initialize_multistep')
+        step_states, log_vars = initialize_multistep(*args, **kwargs)
         loss = 0
         step_id = 0
         while not step_states['terminate']:
@@ -69,8 +70,11 @@ class BaseDiffusion(BaseModel):
 
         diffusion.update(train_cfg=train_cfg, test_cfg=test_cfg)
         self.diffusion = build_module(diffusion)
-        if self.teacher is not None and tie_teacher:
-            tie_untrained_submodules(self.diffusion, self.teacher, tie_tgt_lora_base_layer=True)
+        if self.teacher is not None:
+            if tie_teacher:
+                tie_untrained_submodules(self.diffusion, self.teacher, tie_tgt_lora_base_layer=True)
+            else:
+                untie_all_parameters(self.diffusion, self.teacher, untie_tgt_lora_base_layer=True)
 
         self.patch_size = patch_size
 
@@ -86,6 +90,8 @@ class BaseDiffusion(BaseModel):
                     self.diffusion_ema = build_module(diffusion_ema)
                 if tie_ema:
                     tie_untrained_submodules(self.diffusion_ema, self.diffusion)
+                else:
+                    untie_all_parameters(self.diffusion_ema, self.diffusion)
                 clone_params(self.diffusion_ema, self.diffusion)
 
         self.train_cfg = dict() if train_cfg is None else deepcopy(train_cfg)

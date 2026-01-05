@@ -25,7 +25,7 @@ from diffusers.utils.hub_utils import _get_checkpoint_shard_files
 from mmcv.runner import CheckpointLoader, get_dist_info, _load_checkpoint
 from mmcv.parallel import is_module_wrapper
 from lakonlab.utils import download_from_huggingface, rgetattr
-from lakonlab.utils.io_utils import S3Backend, TMP_DIR
+from lakonlab.utils.io_utils import S3Backend, TMP_DIR, retry
 from lakonlab.parallel import FSDP2Wrapper
 
 
@@ -142,6 +142,7 @@ def exists_ckpt(filename):
 
 
 @CheckpointLoader.register_scheme(prefixes='s3://', force=True)
+@retry()
 def load_from_s3(filename, map_location=None):
     ext = os.path.splitext(filename)[-1].lower()
 
@@ -197,6 +198,7 @@ def load_from_s3(filename, map_location=None):
 
 
 @CheckpointLoader.register_scheme(prefixes='tmp:')
+@retry()
 def load_from_tmp(filename, map_location=None):
     src_file = filename[4:]
     assert os.path.exists(src_file)
@@ -239,6 +241,7 @@ def load_from_tmp(filename, map_location=None):
 
 
 @CheckpointLoader.register_scheme(prefixes='huggingface://')
+@retry()
 def load_from_huggingface(filename, map_location=None):
     cached_file = download_from_huggingface(filename)
     if cached_file.endswith('.index.json'):  # sharded checkpoint
@@ -264,11 +267,7 @@ def load_from_huggingface(filename, map_location=None):
                 subfolder=repo_subfolder)[0]
         ckpt = OrderedDict()
         for sharded_cached_file in sharded_cached_files:
-            ext = os.path.splitext(sharded_cached_file)[-1].lower()
-            if ext == '.safetensors':
-                ckpt.update(load_file(sharded_cached_file, device=map_location))
-            else:
-                ckpt.update(torch.load(sharded_cached_file, map_location=map_location))
+            ckpt.update(load_from_local(sharded_cached_file, map_location))
         return ckpt
     else:
         ext = os.path.splitext(cached_file)[-1].lower()
@@ -279,20 +278,43 @@ def load_from_huggingface(filename, map_location=None):
 
 
 @CheckpointLoader.register_scheme(prefixes='', force=True)
+@retry()
 def load_from_local(filename, map_location=None):
     filename = osp.expanduser(filename)
     if not osp.isfile(filename):
         raise FileNotFoundError(f'{filename} can not be found.')
-    ext = os.path.splitext(filename)[-1].lower()
-    if ext == '.safetensors':
-        with open(filename, "rb") as f:  # load_file may fail with FUSE/NFS mmap
-            ckpt = load(f.read())
-            if map_location is not None:
-                for k in ckpt:
-                    ckpt[k] = ckpt[k].to(map_location)
+    if filename.endswith('.index.json'):  # sharded checkpoint
+        sharded_cached_files = _get_checkpoint_shard_files(
+            os.path.dirname(filename),
+            filename)[0]
+        ckpt = OrderedDict()
+        for sharded_cached_file in sharded_cached_files:
+            ckpt.update(load_from_local(sharded_cached_file, map_location))
     else:
-        ckpt = torch.load(filename, map_location=map_location)
+        ext = os.path.splitext(filename)[-1].lower()
+        if ext == '.safetensors':
+            with open(filename, "rb") as f:  # load_file may fail with FUSE/NFS mmap
+                ckpt = load(f.read())
+                if map_location is not None:
+                    for k in ckpt:
+                        ckpt[k] = ckpt[k].to(map_location)
+        else:
+            ckpt = torch.load(filename, map_location=map_location)
     return ckpt
+
+
+_checkpoint_cache = dict()
+
+
+def _load_cached_checkpoint(filename, map_location=None, logger=None):
+    cache_key = f'{filename}_{map_location}'
+
+    if cache_key in _checkpoint_cache:
+        return _checkpoint_cache[cache_key]
+
+    checkpoint = _load_checkpoint(filename, map_location, logger)
+    _checkpoint_cache[cache_key] = checkpoint
+    return checkpoint
 
 
 def load_checkpoint(model: torch.nn.Module,
@@ -301,8 +323,12 @@ def load_checkpoint(model: torch.nn.Module,
                     strict: bool = False,
                     logger: Optional[logging.Logger] = None,
                     revise_keys: list = [(r'^module\.', '')],
-                    assign: bool = False) -> Union[dict, OrderedDict]:
-    checkpoint = _load_checkpoint(filename, map_location, logger)
+                    assign: bool = False,
+                    use_cache=False) -> Union[dict, OrderedDict]:
+    if use_cache:
+        checkpoint = _load_cached_checkpoint(filename, map_location, logger)
+    else:
+        checkpoint = _load_checkpoint(filename, map_location, logger)
     # OrderedDict is a subclass of dict
     if not isinstance(checkpoint, dict):
         raise RuntimeError(
@@ -337,6 +363,10 @@ def load_checkpoint(model: torch.nn.Module,
     else:  # FSDP1, DDP, or non-distributed model
         load_full_state_dict(model, state_dict, strict, logger, assign)
     return checkpoint
+
+
+def clear_checkpoint_cache():
+    _checkpoint_cache.clear()
 
 
 def _save_to_state_dict(module, destination, prefix, keep_vars, trainable_only=False, cpu_offload=False):
@@ -496,6 +526,8 @@ def get_checkpoint(model,
                    fp16=False,
                    fp16_ema=False,
                    bf16_optim=False):
+    torch.cuda.empty_cache()
+
     if meta is None:
         meta = {}
     elif not isinstance(meta, dict):
@@ -517,6 +549,8 @@ def get_checkpoint(model,
             if ((fp16 and '_ema.' not in k and '_ema2.' not in k) or (fp16_ema and ('_ema.' in k or '_ema2.' in k))) \
                     and v.dtype == torch.float32:
                 checkpoint['state_dict'][k] = v.half()
+
+    torch.cuda.empty_cache()
 
     # save optimizer state dict in the checkpoint
     if isinstance(optimizer, Optimizer):

@@ -41,16 +41,26 @@ Follow the instructions in the [root README](../../README.md#installation) to se
 
 ### Inference
 
-We provide a [Diffusers pipeline](../../lakonlab/pipelines/gmdit_pipeline.py) for easy inference. The following code demonstrates how to sample images from the pretrained GM-DiT model using the GM-ODE 2 solver and the GM-SDE 2 solver.
+We provide a [Diffusers pipeline](../../lakonlab/pipelines/pipeline_gmdit.py) for easy inference. The following code demonstrates how to sample images from the pretrained GM-DiT model using the GM-ODE 2 solver and the GM-SDE 2 solver.
 
 ```python
+import json
 import torch
+from pathlib import Path
 from huggingface_hub import snapshot_download
 from lakonlab.models.diffusions.schedulers import FlowEulerODEScheduler, FlowSDEScheduler
-from lakonlab.pipelines.gmdit_pipeline import GMDiTPipeline
+from lakonlab.pipelines.pipeline_gmdit import GMDiTPipeline
 
-# Currently the pipeline can only load local checkpoints, so we need to download the checkpoint first
+# Download HF repo
 ckpt = snapshot_download(repo_id='Lakonik/gmflow_imagenet_k8_ema')
+# Fix the library path for the new LakonLab package structure
+index_path = Path(ckpt) / 'model_index.json'
+index_dict = json.loads(index_path.read_text(encoding="utf-8"))
+index_dict["spectrum_net"][0] = "lakonlab.models.architecture.gmflow.spectrum_mlp"
+index_dict["transformer"][0] = "lakonlab.models.architecture.gmflow.gmdit"
+index_dict["scheduler"][0] = "lakonlab.models.diffusions.schedulers.flow_euler_ode"
+index_path.write_text(json.dumps(index_dict, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+# Load the local repo
 pipe = GMDiTPipeline.from_pretrained(ckpt, variant='bf16', torch_dtype=torch.bfloat16)
 pipe = pipe.to('cuda')
 
@@ -189,7 +199,7 @@ This full trainer is not optimized for the simple 2D checkerboard dataset, so GP
     - [train_gmflow_toymodel.py](../../demo/train_gmflow_toymodel.py): A simplified training script for the 2D checkerboard experiment.
     - [gmflow.py](../../lakonlab/models/diffusions/gmflow.py): The `forward_train` method contains the full training loop.
 - Inference
-    - [gmdit_pipeline.py](../../lakonlab/pipelines/gmdit_pipeline.py): Full sampling code in the style of Diffusers.
+    - [pipeline_gmdit.py](../../lakonlab/pipelines/pipeline_gmdit.py): Full sampling code in the style of Diffusers.
     - [gmflow.py](../../lakonlab/models/diffusions/gmflow.py): The `forward_test` method contains the same full sampling loop.
 - Networks
     - [gmdit.py](../../lakonlab/models/architecture/gmflow/gmdit.py): GMDiT
